@@ -6,6 +6,8 @@
 #include <chrono>
 #include <mutex>
 #include <map>
+#include <string>
+#include <fstream>
 
 // Global mutex for synchronizing FPS updates and console output
 std::mutex fps_mutex;
@@ -204,6 +206,28 @@ private:
 };
 
 
+std::map<std::string, std::string> read_camera_uris(const std::string& filename) {
+    std::map<std::string, std::string> camera_uris;
+    std::ifstream file(filename);
+    
+    if (!file.is_open()) {
+        std::cerr << "Could not open the file: " << filename << std::endl;
+        return camera_uris; // Return an empty map
+    }
+    
+    std::string line;
+    int index = 0; // Start indexing from 0
+
+    while (std::getline(file, line)) {
+        if (!line.empty()) { // Check if the line is not empty
+            camera_uris["cam"+ std::to_string(index++)] = line; // Store the line in the map
+        }
+    }
+
+    file.close(); // Close the file
+    return camera_uris;
+}
+
 void print_fps(int interval) {
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(interval));
@@ -256,10 +280,13 @@ int main(int argc, char* argv[]) {
     //     {"cam6", "rtsp://xxx/h263"}
     // };
     // Testing 
-    std::map<std::string, std::string> camera_uris;
-    for (int i = 0; i < 2; ++i) {
-        camera_uris["cam" + std::to_string(i)] = "rtsp://localhost:8754/dfc2839f-6f6b-459f-9644-877382fccede";
-    }
+    // std::map<std::string, std::string> camera_uris;
+    // for (int i = 0; i < 2; ++i) {
+    //     camera_uris["cam" + std::to_string(i)] = "rtsp://localhost:8754/dfc2839f-6f6b-459f-9644-877382fccede";
+    // }
+
+    const std::string filename = "cameras.txt"; // Replace with your file name
+    std::map<std::string, std::string> camera_uris = read_camera_uris(filename);
 
     for (const auto& entry : camera_uris) {
         const std::string& name = entry.first;
