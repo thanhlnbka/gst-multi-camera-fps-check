@@ -24,7 +24,7 @@ sudo apt-get install gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins
 ### Build 
 
 ```bash
-git clone https://github.com/yourusername/gst-multi-camera-fps-check.git
+git clone https://github.com/thanhlnbka/gst-multi-camera-fps-check.git
 cd gst-multi-camera-fps-check
 mkdir build
 cd build 
