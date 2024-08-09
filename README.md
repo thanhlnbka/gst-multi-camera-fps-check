@@ -5,7 +5,7 @@ A GStreamer-based application for monitoring and displaying the FPS of multiple 
 ## Features
 
 
-- **Codec support**: Handles a wide range of video codecs, including `H264`, `H265`, `MJPEG`, `VP8`, `VP9`, MPEG2, MPEG4, and `H263`.
+- **Codec support**: Handles a wide range of video codecs, including `H264`, `H265`, `MJPEG`, `VP8`, `VP9` and `H263`.
 - **Customizable FPS check interval**: Define the interval (in seconds) for calculating and displaying the FPS.
 - **Real-time FPS display**: Outputs the FPS for each camera in a readable format (e.g., `cam1: 5 FPS, cam2: 4 FPS`).
 
