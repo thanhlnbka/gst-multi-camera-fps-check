@@ -52,3 +52,4 @@ Run the application with a specified interval (in seconds) for FPS checks. For e
 cam1: 5 FPS, cam2: 4 FPS, cam3: 6 FPS, ...
 ```
 
+

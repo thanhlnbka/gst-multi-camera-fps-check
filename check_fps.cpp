@@ -6,17 +6,21 @@
 #include <chrono>
 #include <mutex>
 #include <map>
+#include <string>
+#include <fstream>
+#include <iomanip>
 
 // Global mutex for synchronizing FPS updates and console output
 std::mutex fps_mutex;
 // Global map to store FPS for each camera
 std::map<std::string, int> fps_map;
+std::map<std::string, int> downtime_map; // Track downtime in seconds for each camera
 
 class Camera {
 public:
     Camera(const std::string& name, const std::string& uri) : name(name), uri(uri), frame_count(0), running(true), encoding_name(nullptr) {
         std::cout << "Initializing camera with URI: " << uri << std::endl;
-
+        downtime_map[name] = -1;
         pipeline = gst_pipeline_new("pipeline");
         appsink = gst_element_factory_make("appsink", "sink");
         GstElement* source = gst_element_factory_make("rtspsrc", "source");
@@ -87,6 +91,19 @@ public:
             {
                 std::lock_guard<std::mutex> fps_lock(fps_mutex);
                 fps_map[name] = fps;
+
+                // Check for downtime and handle reconnect if necessary
+                if (fps == 0) {
+                    downtime_map[name] += 1;
+                    if (downtime_map[name] >= 5) {  // Reconnect if downtime is >= 5*interval seconds
+                        std::cout << "Reconnecting camera: " << name << std::endl;
+                        stop();
+                        start();
+                        downtime_map[name] = 0;  // Reset downtime counter after reconnect
+                    }
+                } else {
+                    downtime_map[name] = 0;  // Reset downtime counter if FPS > 0
+                }
             }
         }
     }
@@ -136,33 +153,35 @@ public:
             std::cerr << "Failed to link pad from rtspsrc to depayloader!" << std::endl;
         } else {
             std::cout << "Linked pad from rtspsrc to depayloader." << std::endl;
-
-            // Now link the depayloader to appsink
-            if (g_strcmp0(camera->encoding_name, "H264") == 0) {
-                if (gst_element_link(camera->rtph264depay, camera->appsink) != TRUE) {
-                    std::cerr << "Failed to link rtph264depay -> appsink!" << std::endl;
-                }
-            } else if (g_strcmp0(camera->encoding_name, "H265") == 0) {
-                if (gst_element_link(camera->rtph265depay, camera->appsink) != TRUE) {
-                    std::cerr << "Failed to link rtph265depay -> appsink!" << std::endl;
-                }
-            } else if (g_strcmp0(camera->encoding_name, "JPEG") == 0) {
-                if (gst_element_link(camera->rtpmjpegdepay, camera->appsink) != TRUE) {
-                    std::cerr << "Failed to link rtpmjpegdepay -> appsink!" << std::endl;
-                }
-            } else if (g_strcmp0(camera->encoding_name, "VP8") == 0) {
-                if (gst_element_link(camera->rtppv8depay, camera->appsink) != TRUE) {
-                    std::cerr << "Failed to link rtppv8depay -> appsink!" << std::endl;
-                }
-            } else if (g_strcmp0(camera->encoding_name, "VP9") == 0) {
-                if (gst_element_link(camera->rtppv9depay, camera->appsink) != TRUE) {
-                    std::cerr << "Failed to link rtppv9depay -> appsink!" << std::endl;
-                }
-            } else if (g_strcmp0(camera->encoding_name, "H263") == 0) {
-                if (gst_element_link(camera->rtph263depay, camera->appsink) != TRUE) {
-                    std::cerr << "Failed to link rtph263depay -> appsink!" << std::endl;
+            if (downtime_map[camera->name] == -1){
+                // Now link the depayloader to appsink
+                if (g_strcmp0(camera->encoding_name, "H264") == 0) {
+                    if (gst_element_link(camera->rtph264depay, camera->appsink) != TRUE) {
+                        std::cerr << "Failed to link rtph264depay -> appsink!" << std::endl;
+                    }
+                } else if (g_strcmp0(camera->encoding_name, "H265") == 0) {
+                    if (gst_element_link(camera->rtph265depay, camera->appsink) != TRUE) {
+                        std::cerr << "Failed to link rtph265depay -> appsink!" << std::endl;
+                    }
+                } else if (g_strcmp0(camera->encoding_name, "JPEG") == 0) {
+                    if (gst_element_link(camera->rtpmjpegdepay, camera->appsink) != TRUE) {
+                        std::cerr << "Failed to link rtpmjpegdepay -> appsink!" << std::endl;
+                    }
+                } else if (g_strcmp0(camera->encoding_name, "VP8") == 0) {
+                    if (gst_element_link(camera->rtppv8depay, camera->appsink) != TRUE) {
+                        std::cerr << "Failed to link rtppv8depay -> appsink!" << std::endl;
+                    }
+                } else if (g_strcmp0(camera->encoding_name, "VP9") == 0) {
+                    if (gst_element_link(camera->rtppv9depay, camera->appsink) != TRUE) {
+                        std::cerr << "Failed to link rtppv9depay -> appsink!" << std::endl;
+                    }
+                } else if (g_strcmp0(camera->encoding_name, "H263") == 0) {
+                    if (gst_element_link(camera->rtph263depay, camera->appsink) != TRUE) {
+                        std::cerr << "Failed to link rtph263depay -> appsink!" << std::endl;
+                    }
                 }
             }
+            
         }
 
         gst_object_unref(sink_pad);
@@ -204,6 +223,28 @@ private:
 };
 
 
+std::map<std::string, std::string> read_camera_uris(const std::string& filename) {
+    std::map<std::string, std::string> camera_uris;
+    std::ifstream file(filename);
+    
+    if (!file.is_open()) {
+        std::cerr << "Could not open the file: " << filename << std::endl;
+        return camera_uris; // Return an empty map
+    }
+    
+    std::string line;
+    int index = 0; // Start indexing from 0
+
+    while (std::getline(file, line)) {
+        if (!line.empty()) { // Check if the line is not empty
+            camera_uris["cam"+ std::to_string(index++)] = line; // Store the line in the map
+        }
+    }
+
+    file.close(); // Close the file
+    return camera_uris;
+}
+
 void print_fps(int interval) {
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(interval));
@@ -212,9 +253,17 @@ void print_fps(int interval) {
         size_t count = fps_map.size();
         size_t current = 0;
 
+
+        // Get the current time
+        std::time_t now = std::time(nullptr);
+        std::tm* local_time = std::localtime(&now);
+
+        // Print the timestamp
+        std::cout << "[\033[1;34m" << std::put_time(local_time, "%d:%m:%Y %H:%M:%S") << "]\033[0m ";
+
         for (const auto& entry : fps_map) {
             ++current;
-            if (entry.second == 0) {
+            if (entry.second < 5) {
                 // Print in red if FPS is 0
                 std::cout << "\033[1;31m" << entry.first << ": " << entry.second << " FPS\033[0m";
             } else {
@@ -257,9 +306,13 @@ int main(int argc, char* argv[]) {
     // };
     // Testing 
     std::map<std::string, std::string> camera_uris;
-    for (int i = 0; i < 2; ++i) {
-        camera_uris["cam" + std::to_string(i)] = "rtsp://localhost:8754/dfc2839f-6f6b-459f-9644-877382fccede";
+    for (int i = 0; i < 5; ++i) {
+        camera_uris["cam" + std::to_string(i)] = "rtsp://localhost:8754/1cc8324e-2485-4e77-b526-7be4fc7bab1f";
     }
+    
+
+    // const std::string filename = "cameras.txt"; // Replace with your file name
+    // std::map<std::string, std::string> camera_uris = read_camera_uris(filename);
 
     for (const auto& entry : camera_uris) {
         const std::string& name = entry.first;
@@ -268,12 +321,13 @@ int main(int argc, char* argv[]) {
         camera->start();
         cameras.push_back(camera);
         threads.emplace_back(&Camera::run, camera, interval);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     // Create a separate thread to print the FPS values
     std::thread print_thread(print_fps, interval);
 
-    std::this_thread::sleep_for(std::chrono::seconds(300));  // Run for 5 minutes (can be adjusted)
+    std::this_thread::sleep_for(std::chrono::seconds(6000));  // Run for 10 minutes (can be adjusted)
 
     for (auto& camera : cameras) {
         camera->set_running(false);
