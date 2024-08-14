@@ -49,7 +49,14 @@ Run the application with a specified interval (in seconds) for FPS checks. For e
 ### Example Output
 
 ```bash
-cam1: 5 FPS, cam2: 4 FPS, cam3: 6 FPS, ...
+[dd:mm:yyyy h:m:s] cam1: 5 FPS, cam2: 4 FPS, cam3: 6 FPS, ...
 ```
 
+### Note
+
+If you encounter an error when reading more than 200 RTSP streams simultaneously with the message ***Creating pipes for GWakeup: Too many open files*** you can try running the following command in your terminal to increase the maximum number of open files:
+
+```bash
+ulimit -n 4096
+```
 
