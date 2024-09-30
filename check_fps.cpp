@@ -9,7 +9,6 @@
 #include <string>
 #include <fstream>
 #include <iomanip>
-
 // Global mutex for synchronizing FPS updates and console output
 std::mutex fps_mutex;
 // Global map to store FPS for each camera
@@ -18,40 +17,33 @@ std::map<std::string, int> downtime_map; // Track downtime in seconds for each c
 
 class Camera {
 public:
-    Camera(const std::string& name, const std::string& uri) : name(name), uri(uri), frame_count(0), running(true), encoding_name(nullptr) {
+    Camera(const std::string& name, const std::string& uri) : name(name), uri(uri), frame_count(0), running(true) {
         std::cout << "Initializing camera with URI: " << uri << std::endl;
         downtime_map[name] = -1;
         pipeline = gst_pipeline_new("pipeline");
         appsink = gst_element_factory_make("appsink", "sink");
-        GstElement* source = gst_element_factory_make("rtspsrc", "source");
-        rtph264depay = gst_element_factory_make("rtph264depay", "h264depay");
-        rtph265depay = gst_element_factory_make("rtph265depay", "h265depay");
-        rtpmjpegdepay = gst_element_factory_make("rtpjpegdepay", "mjpegdepay");
-        rtppv8depay = gst_element_factory_make("rtpvp8depay", "vp8depay");
-        rtppv9depay = gst_element_factory_make("rtpvp9depay", "vp9depay");
-        rtph263depay = gst_element_factory_make("rtph263depay", "h263depay");
+        source = gst_element_factory_make("rtspsrc", "source");
+        parsebin = gst_element_factory_make("parsebin", "parsebin");
 
-        if (!pipeline || !appsink || !source || !rtph264depay || !rtph265depay || 
-            !rtpmjpegdepay || !rtppv8depay || !rtppv9depay || !rtph263depay) {
+        if (!pipeline || !appsink || !source || !parsebin) {
             std::cerr << "Failed to create GStreamer elements!" << std::endl;
             return;
         }
 
         // Configure the source
         g_object_set(source, "location", uri.c_str(), NULL);
-        // g_object_set(source, "latency", 100, NULL);
-        // g_object_set(source, "buffer-mode", 2, NULL);
         g_object_set(source, "protocols", 4, NULL); // set TCP read
-        g_object_set (source, "short-header", 1, NULL);
 
         // Configure appsink
         g_object_set(appsink, "emit-signals", TRUE, NULL);
         g_signal_connect(appsink, "new-sample", G_CALLBACK(&Camera::on_new_sample), this);
 
         // Set up the pipeline
-        gst_bin_add_many(GST_BIN(pipeline), source, rtph264depay, rtph265depay, 
-                         rtpmjpegdepay, rtppv8depay, rtppv9depay, rtph263depay, appsink, NULL);
+        gst_bin_add_many(GST_BIN(pipeline), source, parsebin, appsink, NULL);
         g_signal_connect(source, "pad-added", G_CALLBACK(&Camera::on_pad_added), this);
+
+        // Link parsebin to appsink
+        g_signal_connect(parsebin, "pad-added", G_CALLBACK(&Camera::on_parsebin_pad_added), this);
 
         std::cout << "Camera initialized successfully." << std::endl;
     }
@@ -108,80 +100,36 @@ public:
         }
     }
 
-
     static void on_pad_added(GstElement* src, GstPad* pad, Camera* camera) {
         std::cout << "Pad added for camera: " << camera->uri << std::endl;
 
         GstCaps* caps = gst_pad_query_caps(pad, NULL);
         GstStructure* s = gst_caps_get_structure(caps, 0);
-        
-        camera->encoding_name = gst_structure_get_string(s, "encoding-name");
-        if (camera->encoding_name) {
-            std::cout << "ENCODING NAME: " << camera->encoding_name << std::endl;
+        const gchar* encoding_name = gst_structure_get_string(s, "encoding-name");
+
+        if (encoding_name) {
+            std::cout << "ENCODING NAME: " << encoding_name << std::endl;
         } else {
             std::cout << "Failed to get encoding-name." << std::endl;
             return; // Exit if encoding-name is not found
         }
 
-        GstPad* sink_pad = nullptr;
-
-        // Link the new pad to the appropriate depayloader
-        if (g_strcmp0(camera->encoding_name, "H265") == 0) {
-            sink_pad = gst_element_get_static_pad(camera->rtph265depay, "sink");
-        } 
-        else if (g_strcmp0(camera->encoding_name, "H264") == 0) {
-            sink_pad = gst_element_get_static_pad(camera->rtph264depay, "sink");
-        }
-        else if (g_strcmp0(camera->encoding_name, "JPEG") == 0) {
-            sink_pad = gst_element_get_static_pad(camera->rtpmjpegdepay, "sink");
-        }
-        else if (g_strcmp0(camera->encoding_name, "VP8") == 0) {
-            sink_pad = gst_element_get_static_pad(camera->rtppv8depay, "sink");
-        }
-        else if (g_strcmp0(camera->encoding_name, "VP9") == 0) {
-            sink_pad = gst_element_get_static_pad(camera->rtppv9depay, "sink");
-        }
-        else if (g_strcmp0(camera->encoding_name, "H263") == 0) {
-            sink_pad = gst_element_get_static_pad(camera->rtph263depay, "sink");
-        } else {
-            std::cerr << "Unsupported encoding name: " << camera->encoding_name << std::endl;
-            return; // Exit if encoding is not supported
-        }
-
-        // Link the new pad to the depayloader
+        GstPad* sink_pad = gst_element_get_static_pad(camera->parsebin, "sink");
         if (gst_pad_link(pad, sink_pad) != GST_PAD_LINK_OK) {
-            std::cerr << "Failed to link pad from rtspsrc to depayloader!" << std::endl;
+            std::cerr << "Failed to link pad from rtspsrc to parsebin!" << std::endl;
+        }
+        gst_object_unref(sink_pad);
+    }
+
+    static void on_parsebin_pad_added(GstElement* parsebin, GstPad* pad, Camera* camera) {
+        std::cout << "Pad added for parsebin for camera: " << camera->uri << std::endl;
+
+        // Link to appsink
+        GstPad* sink_pad = gst_element_get_static_pad(camera->appsink, "sink");
+        if (gst_pad_link(pad, sink_pad) != GST_PAD_LINK_OK) {
+            std::cerr << "Failed to link parsebin pad to appsink!" << std::endl;
         } else {
-            std::cout << "Linked pad from rtspsrc to depayloader." << std::endl;
-            if (downtime_map[camera->name] == -1){
-                // Now link the depayloader to appsink
-                if (g_strcmp0(camera->encoding_name, "H264") == 0) {
-                    if (gst_element_link(camera->rtph264depay, camera->appsink) != TRUE) {
-                        std::cerr << "Failed to link rtph264depay -> appsink!" << std::endl;
-                    }
-                } else if (g_strcmp0(camera->encoding_name, "H265") == 0) {
-                    if (gst_element_link(camera->rtph265depay, camera->appsink) != TRUE) {
-                        std::cerr << "Failed to link rtph265depay -> appsink!" << std::endl;
-                    }
-                } else if (g_strcmp0(camera->encoding_name, "JPEG") == 0) {
-                    if (gst_element_link(camera->rtpmjpegdepay, camera->appsink) != TRUE) {
-                        std::cerr << "Failed to link rtpmjpegdepay -> appsink!" << std::endl;
-                    }
-                } else if (g_strcmp0(camera->encoding_name, "VP8") == 0) {
-                    if (gst_element_link(camera->rtppv8depay, camera->appsink) != TRUE) {
-                        std::cerr << "Failed to link rtppv8depay -> appsink!" << std::endl;
-                    }
-                } else if (g_strcmp0(camera->encoding_name, "VP9") == 0) {
-                    if (gst_element_link(camera->rtppv9depay, camera->appsink) != TRUE) {
-                        std::cerr << "Failed to link rtppv9depay -> appsink!" << std::endl;
-                    }
-                } else if (g_strcmp0(camera->encoding_name, "H263") == 0) {
-                    if (gst_element_link(camera->rtph263depay, camera->appsink) != TRUE) {
-                        std::cerr << "Failed to link rtph263depay -> appsink!" << std::endl;
-                    }
-                }
-            }
-            
+            std::cout << "Linked pad from parsebin to appsink." << std::endl;
         }
 
         gst_object_unref(sink_pad);
@@ -192,7 +140,6 @@ public:
         if (sample) {
             std::lock_guard<std::mutex> lock(camera->mutex);
             camera->frame_count++;
-            // std::cout << "Counter ..." << std::endl;
             gst_sample_unref(sample); // Free the sample
             return GST_FLOW_OK;
         } else {
@@ -210,18 +157,13 @@ private:
     std::string uri;
     GstElement* pipeline;
     GstElement* appsink;
-    GstElement* rtph264depay; // Make rtph264depay a member variable
-    GstElement* rtph265depay;
-    GstElement* rtpmjpegdepay;
-    GstElement* rtppv8depay;
-    GstElement* rtppv9depay;
-    GstElement* rtph263depay;
+    GstElement* parsebin;
+    GstElement* source;
     const gchar* encoding_name;
     int frame_count;
     bool running;
     std::mutex mutex;  // To protect frame_count
 };
-
 
 std::map<std::string, std::string> read_camera_uris(const std::string& filename) {
     std::map<std::string, std::string> camera_uris;
@@ -280,8 +222,6 @@ void print_fps(int interval) {
     }
 }
 
-
-
 int main(int argc, char* argv[]) {
     gst_init(&argc, &argv);
 
@@ -295,51 +235,33 @@ int main(int argc, char* argv[]) {
     std::vector<Camera*> cameras;
     std::vector<std::thread> threads;
 
-    // Add camera URIs here
-    // std::map<std::string, std::string> camera_uris = {
-    //     {"cam1", "rtsp://xxx/h264"},
-    //     {"cam2", "rtsp://xxx/h265"},
-    //     {"cam3", "rtsp://xxx/mjpeg"},
-    //     {"cam4", "rtsp://xxx/vp8"},
-    //     {"cam5", "rtsp://xxx/vp9"},
-    //     {"cam6", "rtsp://xxx/h263"}
+    // Add camera URIs here or read from a file
+    // Example: std::map<std::string, std::string> camera_uris = {
+    //     {"Camera1", "rtspt://localhost:8554/test"},
+    //     {"Camera2", "rtspt://localhost:8554/test2"}
     // };
-    // Testing 
-    std::map<std::string, std::string> camera_uris;
-    for (int i = 0; i < 5; ++i) {
-        camera_uris["cam" + std::to_string(i)] = "rtsp://localhost:8754/1cc8324e-2485-4e77-b526-7be4fc7bab1f";
-    }
+
+    std::map<std::string, std::string> camera_uris = read_camera_uris("../cameras.txt");
     
-
-    // const std::string filename = "cameras.txt"; // Replace with your file name
-    // std::map<std::string, std::string> camera_uris = read_camera_uris(filename);
-
     for (const auto& entry : camera_uris) {
-        const std::string& name = entry.first;
-        const std::string& uri = entry.second;
-        Camera* camera = new Camera(name, uri);
+        Camera* camera = new Camera(entry.first, entry.second);
         camera->start();
         cameras.push_back(camera);
-        threads.emplace_back(&Camera::run, camera, interval);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        threads.emplace_back(&Camera::run, camera, interval); // Start camera run in a thread
     }
 
-    // Create a separate thread to print the FPS values
-    std::thread print_thread(print_fps, interval);
+    std::thread fps_thread(print_fps, interval); // Start the FPS printing thread
 
-    std::this_thread::sleep_for(std::chrono::seconds(6000));  // Run for 10 minutes (can be adjusted)
+    // Run the main thread for a fixed duration
+    std::this_thread::sleep_for(std::chrono::seconds(6000)); // Run for 6000 seconds
 
+    // Cleanup
     for (auto& camera : cameras) {
-        camera->set_running(false);
-        camera->stop();
-        delete camera;
+        camera->set_running(false); // Stop the camera thread
+        camera->stop(); // Stop the camera
+        delete camera; // Free the memory
     }
 
-    for (auto& thread : threads) {
-        thread.join();
-    }
-    // Ensure print thread stops gracefully (optional, depending on use case)
-    print_thread.detach();
-
+    fps_thread.join(); // Wait for FPS thread to finish
     return 0;
 }
